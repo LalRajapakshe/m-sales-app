@@ -522,16 +522,16 @@ class _OrderPageState extends State<OrderPage> {
                 ],
               ),
             ),
-          isLoading
-              ? const FullScreenLoading()
-              : Padding(
-                  padding: const EdgeInsets.all(8.0), // Add padding here
-                  child: GridView.count(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    crossAxisCount: 2,
-                    mainAxisSpacing: 2.0,
-                    crossAxisSpacing: 2.0,
+          Expanded(
+            child: isLoading
+                ? const FullScreenLoading()
+                : Padding(
+                    padding: const EdgeInsets.all(8.0),
+                    child: GridView.count(
+                      crossAxisCount: 2,
+                      mainAxisSpacing: 2.0,
+                      crossAxisSpacing: 2.0,
+                      padding: const EdgeInsets.only(bottom: 72),
                     children: List.generate(
                       finalItemList.length,
                       (index) => Stack(
@@ -664,6 +664,7 @@ class _OrderPageState extends State<OrderPage> {
                     ),
                   ),
                 ),
+          ),
           // const Spacer(),
         ],
       ),

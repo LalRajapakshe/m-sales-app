@@ -38,8 +38,8 @@ class AuthService with ChangeNotifier {
         Map<String, dynamic> payload = JwtDecoder.decode(response.body);
         String userId = payload['UserId'];
         _user = User(username: userName, password: password, userId: userId);
-        Settings.setAccessToken(response.body);
-        Settings.setUserID(userId);
+        await Settings.setAccessToken(response.body);
+        await Settings.setUserID(userId);
         // print(url);
         // print(response.body);
         _isAuthenticated = true;
@@ -49,6 +49,47 @@ class AuthService with ChangeNotifier {
       }
     } catch (error) {
       rethrow;
+    }
+  }
+
+  Future<bool> ensureValidAccessToken() async {
+    try {
+      final accessToken = await Settings.getAccessToken();
+      bool tokenIsValid = false;
+      if (accessToken.isNotEmpty) {
+        try {
+          tokenIsValid = !JwtDecoder.isExpired(accessToken);
+        } catch (_) {
+          tokenIsValid = false;
+        }
+      }
+      if (tokenIsValid) {
+        return true;
+      }
+
+      final userName = await Settings.getUserName();
+      final password = await Settings.getPassword();
+      if (userName == null ||
+          userName.isEmpty ||
+          password == null ||
+          password.isEmpty) {
+        return false;
+      }
+
+      await login(userName, password).timeout(const Duration(seconds: 15));
+
+      final refreshedToken = await Settings.getAccessToken();
+      if (refreshedToken.isEmpty) {
+        return false;
+      }
+      try {
+        return !JwtDecoder.isExpired(refreshedToken);
+      } catch (_) {
+        return false;
+      }
+    } catch (error) {
+      print('Unable to obtain a valid access token: $error');
+      return false;
     }
   }
 
@@ -206,7 +247,7 @@ class AuthService with ChangeNotifier {
     }
   }
 
-  Future<void> updateGin(String ginNo) async {
+ /*  Future<void> updateGin(String ginNo) async {
     print("TENENT : $TENENT");
     final url = Uri.parse(
         '${BASER_URL}/tapi/$TENENT/mobile/mobileSales/UpdateGINStatus');
@@ -245,7 +286,55 @@ class AuthService with ChangeNotifier {
       throw Exception('Error updating GIN: $error');
     }
   }
+ */
 
+Future<bool> updateGin(String ginNo) async {
+  print('STEP 5 - updateGin received: $ginNo');
+  print('STEP 6 - sending to API: $ginNo');
+  final url = Uri.parse(
+      '${BASER_URL}/tapi/$TENENT/mobile/mobileSales/UpdateGINStatus');
+
+  String accessToken = await Settings.getAccessToken();
+
+  try {
+    final body = jsonEncode({
+      'GinNos': [
+        {
+          'ginNo': ginNo,
+        }
+      ]
+    });
+
+    final response = await http.post(
+      url,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $accessToken',
+      },
+      body: body,
+    );
+
+    print('UpdateGINStatus statusCode: ${response.statusCode}');
+    print('UpdateGINStatus body: ${response.body}');
+    print('UpdateGINStatus reasonPhrase: ${response.reasonPhrase}');
+
+    if (response.statusCode != 200) {
+      return false;
+    }
+
+    final result = int.tryParse(response.body);
+    print('UpdateGINStatus parsed result: $result');
+
+    if (result != null && result < 0) {
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    print('Error updating GIN: $error');
+    return false;
+  }
+}
   void logout() {
     _isAuthenticated = false;
     notifyListeners();

@@ -110,8 +110,11 @@ class _RecieptHistoryState extends State<RecieptHistory> {
                           customer: widget.customer,
                         )),
               );
-            },
+            }, 
+
+
           ),
+
         ],
       ),
       body: isLoading
@@ -237,7 +240,7 @@ class _RecieptHistoryState extends State<RecieptHistory> {
                                                 color: Colors.orange,
                                                 tooltip: 'print',
                                                 icon: const Icon(Icons.print),
-                                                onPressed: () {
+/*                                                 onPressed: () {
                                                   Reciept? reciept = getReciept(
                                                       customerData[index]
                                                           ['recieptId']!);
@@ -261,7 +264,36 @@ class _RecieptHistoryState extends State<RecieptHistory> {
                                                                       },
                                                                     )));
                                                   }
-                                                },
+                                                }, */
+onPressed: () {
+  print("RECEIPT PRINT BUTTON CLICKED");
+
+  final receiptId = customerData[index]['recieptId']!;
+  print("RECEIPT ID: $receiptId");
+
+  Reciept? reciept = getReciept(receiptId);
+
+  print("RECEIPT FOUND: ${reciept != null}");
+
+  if (reciept != null) {
+    print("OPENING PRINT SCREEN");
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => PrintScreen(
+          recieptList: [reciept],
+          customer: widget.customer,
+          isCopy: true,
+          closeButtonAction: () {
+            Navigator.pop(context);
+          },
+        ),
+      ),
+    );
+  }
+},
+
+
                                               )
                                             ],
                                           ),

@@ -326,9 +326,14 @@ class LineItemsSelected {
   double? selectedQuantity;
   int? id;
   String? invoiceId;
+  String? docTime;
 
   LineItemsSelected(
-      {this.item, this.selectedQuantity, this.id, this.invoiceId});
+      {this.item,
+      this.selectedQuantity,
+      this.id,
+      this.invoiceId,
+      this.docTime});
 
   LineItemsSelected.fromJson(Map<String, dynamic> json) {
     item = LineItems.fromJson(json['item']);

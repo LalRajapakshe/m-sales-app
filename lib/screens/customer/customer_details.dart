@@ -55,7 +55,15 @@ class _CustomerDetailsState extends State<CustomerDetails> {
       isLoading = true;
     });
     String refCode = await Settings.getGinStuHdrFgnRefCode() ?? '';
-    getPrices(widget.customer.userId!, refCode);
+    if (refCode.isEmpty) {
+      await getPrices(widget.customer.userId!, refCode);
+    } else {
+      if (mounted) {
+        setState(() {
+          isLoading = false;
+        });
+      }
+    }
   }
 
   getPrices(String userId, String refCode) async {

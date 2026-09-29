@@ -12,6 +12,7 @@ import 'package:m_sales/models/price.dart';
 import 'package:m_sales/models/reciept.dart';
 import 'package:m_sales/models/setting_types.dart';
 import 'package:m_sales/models/user_model.dart';
+import 'package:intl/intl.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 
@@ -586,20 +587,48 @@ class DatabaseHelper {
   //   await batch.commit(noResult: true);
   // }
 
-  Future<void> insertGinResponse(List<GinResponse> ginResponse) async {
+  Future<void> insertGinResponse(
+    List<GinResponse> ginResponse, {
+    bool replaceExisting = true,
+  }) async {
     Database db = await database;
     String userId = await Settings.getUserID() ?? '';
-    await db.delete(
-      ginTable,
-      where: 'userId = ?',
-      whereArgs: [userId],
-    );
-    await db.delete(
-      lineItemsTable,
-      where: 'userId = ?',
-      whereArgs: [userId],
-    );
+
+    if (replaceExisting) {
+      await db.delete(
+        ginTable,
+        where: 'userId = ?',
+        whereArgs: [userId],
+      );
+      await db.delete(
+        lineItemsTable,
+        where: 'userId = ?',
+        whereArgs: [userId],
+      );
+    }
+
     for (var ginItem in ginResponse) {
+      if (!replaceExisting) {
+        List<Map<String, dynamic>> existing = [];
+        if (ginItem.ginStuHdrGinNo != null &&
+            ginItem.ginStuHdrGinNo!.isNotEmpty) {
+          existing = await db.query(
+            ginTable,
+            where: 'userId = ? AND $colGinStuHdrGinNo = ?',
+            whereArgs: [userId, ginItem.ginStuHdrGinNo],
+          );
+        } else if (ginItem.ginStuHdrId != null) {
+          existing = await db.query(
+            ginTable,
+            where: 'userId = ? AND $colGinStuHdrId = ?',
+            whereArgs: [userId, ginItem.ginStuHdrId],
+          );
+        }
+        if (existing.isNotEmpty) {
+          continue;
+        }
+      }
+
       GinResponseLocal local = GinResponseLocal(
           ginNo: ginItem.ginNo,
           ginStuHdrId: ginItem.ginStuHdrId,
@@ -613,15 +642,14 @@ class DatabaseHelper {
           ginStuHdrToLocCode: ginItem.ginStuHdrToLocCode,
           userId: ginItem.userId);
       await db.insert(ginTable, local.toJson());
-      if (ginItem.lineItems != []) {
-        for (LineItems lineItem in ginItem.lineItems!) {
-          lineItem.handsOnQty = lineItem.ginStuQuantity;
-          lineItem.isFresh = '';
-          lineItem.isExpired = '';
-          lineItem.isDamaged = '';
-          print(lineItem.toJson());
-          db.insert(lineItemsTable, lineItem.toJson());
-        }
+      final List<LineItems> lineItems = ginItem.lineItems ?? [];
+      for (LineItems lineItem in lineItems) {
+        lineItem.handsOnQty = lineItem.ginStuQuantity;
+        lineItem.isFresh = '';
+        lineItem.isExpired = '';
+        lineItem.isDamaged = '';
+        print(lineItem.toJson());
+        await db.insert(lineItemsTable, lineItem.toJson());
       }
     }
   }
@@ -755,7 +783,8 @@ class DatabaseHelper {
     //   whereArgs: [id],
     // );
     print('id---$id');
-    await insertDoc(DocDetails(
+    final bool isReturn = invoice.isReturn == 'true';
+    await updateDocDetails(DocDetails(
       repCode: _docDetails.repCode,
       invCode: _docDetails.invCode,
       repName: _docDetails.repName,
@@ -765,13 +794,25 @@ class DatabaseHelper {
       bankReceLastNo: _docDetails.bankReceLastNo,
       repShortCode: _docDetails.repShortCode,
       returnCode: _docDetails.returnCode,
-      invLastNo: _docDetails.invLastNo! + 1,
-      returnLastNo: _docDetails.returnLastNo,
+      invLastNo: isReturn
+          ? _docDetails.invLastNo
+          : (_docDetails.invLastNo ?? 0) + 1,
+      returnLastNo: isReturn
+          ? (_docDetails.returnLastNo ?? 0) + 1
+          : _docDetails.returnLastNo,
       docNoLength: _docDetails.docNoLength,
     ));
+    final DateTime? invoiceSavedAt = DateTime.tryParse(invoice.dateTime ?? '');
+    final String? docTime = invoiceSavedAt == null
+        ? null
+        : DateFormat('HH:mm:ss').format(invoiceSavedAt);
     for (var item in invoice.items!) {
+      // docTime lives only in the invoicedItems JSON; LineItems.toJson() is
+      // also written to lineItemsTable, which has no docTime column.
+      final Map<String, dynamic> itemJson = item.item!.toJson();
+      itemJson['docTime'] = docTime;
       LineItemsSelectedDb lineItemsSelectedDb = LineItemsSelectedDb(
-          item: jsonEncode(item.item),
+          item: jsonEncode(itemJson),
           selectedQuantity: item.selectedQuantity,
           invoiceId: invoice.isReturn == 'true'
               ? '${_docDetails.returnCode ?? 'RTN'}-${(_docDetails.returnLastNo! + 1).toString().padLeft(5, '0')}'
@@ -933,11 +974,13 @@ class DatabaseHelper {
           dataList.map((e) => LineItemsSelectedDb.fromJson(e)).toList();
       List<LineItemsSelected> finalList = [];
       for (var element in result) {
+        final Map<String, dynamic> itemJson = jsonDecode(element.item!);
         finalList.add(LineItemsSelected(
           id: element.id,
           invoiceId: element.invoiceId,
-          item: LineItems.fromJson(jsonDecode(element.item!)),
+          item: LineItems.fromJson(itemJson),
           selectedQuantity: element.selectedQuantity,
+          docTime: itemJson['docTime'],
         ));
       }
       Invoice _invoice = Invoice(
@@ -980,11 +1023,13 @@ class DatabaseHelper {
           dataList.map((e) => LineItemsSelectedDb.fromJson(e)).toList();
       List<LineItemsSelected> finalList = [];
       for (var element in result) {
+        final Map<String, dynamic> itemJson = jsonDecode(element.item!);
         finalList.add(LineItemsSelected(
           id: element.id,
           invoiceId: element.invoiceId,
-          item: LineItems.fromJson(jsonDecode(element.item!)),
+          item: LineItems.fromJson(itemJson),
           selectedQuantity: element.selectedQuantity,
+          docTime: itemJson['docTime'],
         ));
       }
       Invoice _invoice = Invoice(
@@ -1015,6 +1060,9 @@ class DatabaseHelper {
     List<int> successCollection = [];
     for (var reciept in recieptList) {
       DocDetails _docDetails = await getDocDetails();
+      final bool isCheque = priceType == 'Cheque';
+      final int nextCashReceLastNo = (_docDetails.cashReceLastNo ?? 0) + 1;
+      final int nextBankReceLastNo = (_docDetails.bankReceLastNo ?? 0) + 1;
       //  int id = await db.insert(recieptTable, reciept.toJson());
       await db.insert(
         recieptTable,
@@ -1026,9 +1074,9 @@ class DatabaseHelper {
                 priceType: reciept.priceType,
                 dateTime: reciept.dateTime,
                 netTotal: reciept.netTotal,
-                recieptId: priceType == 'Cheque'
-                    ? '${_docDetails.bankReceCode} -${(_docDetails.bankReceLastNo ?? 0 + 1).toString().padLeft(5, '0')}'
-                    : '${_docDetails.cashReceCode} -${(_docDetails.cashReceLastNo ?? 0 + 1).toString().padLeft(5, '0')}',
+                recieptId: isCheque
+                    ? '${_docDetails.bankReceCode} -${nextBankReceLastNo.toString().padLeft(5, '0')}'
+                    : '${_docDetails.cashReceCode} -${nextCashReceLastNo.toString().padLeft(5, '0')}',
                 invoiceId: reciept.invoiceId,
                 chtAccAccNo: reciept.chtAccAccNo,
                 chequeAmount: reciept.chequeAmount,
@@ -1043,21 +1091,24 @@ class DatabaseHelper {
                 payMode: reciept.payMode)
             .toJson(),
       );
-      await insertDoc(DocDetails(
+      await updateDocDetails(DocDetails(
         repCode: _docDetails.repCode,
         invCode: _docDetails.invCode,
         repName: _docDetails.repName,
         cashReceCode: _docDetails.cashReceCode,
-        cashReceLastNo: _docDetails.cashReceLastNo! + 1,
+        cashReceLastNo:
+            isCheque ? _docDetails.cashReceLastNo : nextCashReceLastNo,
         bankReceCode: _docDetails.bankReceCode,
-        bankReceLastNo: _docDetails.bankReceLastNo! + 1,
+        bankReceLastNo:
+            isCheque ? nextBankReceLastNo : _docDetails.bankReceLastNo,
         repShortCode: _docDetails.repShortCode,
         returnCode: _docDetails.returnCode,
         invLastNo: _docDetails.invLastNo,
         returnLastNo: _docDetails.returnLastNo,
         docNoLength: _docDetails.docNoLength,
       ));
-      successCollection.add(_docDetails.cashReceLastNo ?? 0 + 1);
+      successCollection
+          .add(isCheque ? nextBankReceLastNo : nextCashReceLastNo);
     }
     if (successCollection.length == recieptList.length) {
       return true;
@@ -1170,17 +1221,71 @@ class DatabaseHelper {
 
   Future<int?> insertDoc(DocDetails docDetails) async {
     Database db = await database;
-    int? id = await db.insert(doctable, docDetails.toJson());
-    return id;
+    final existingRows = await db.query(
+      doctable,
+      orderBy: '$colId ASC',
+    );
+
+    if (existingRows.isEmpty) {
+      return await db.insert(doctable, docDetails.toJson());
+    }
+
+    final DocDetails existing = DocDetails.fromJson(existingRows.first);
+    final int keepId = existingRows.first[colId] as int;
+    final bool sameRep = docDetails.repCode != null &&
+        existing.repCode != null &&
+        docDetails.repCode == existing.repCode;
+
+    if (sameRep) {
+      await db.update(
+        doctable,
+        docDetails.toJson(),
+        where: '$colId = ?',
+        whereArgs: [keepId],
+      );
+      if (existingRows.length > 1) {
+        await db.delete(
+          doctable,
+          where: '$colId != ?',
+          whereArgs: [keepId],
+        );
+      }
+      return keepId;
+    }
+
+    await db.delete(doctable);
+    return await db.insert(doctable, docDetails.toJson());
   }
 
-  Future<DocDetails> getDocDetails() async {
-    final db = await database;
-    final maps = await db.query(
+  Future<void> updateDocDetails(DocDetails docDetails) async {
+    Database db = await database;
+    final existingRows = await db.query(
       doctable,
+      orderBy: '$colId ASC',
+      limit: 1,
     );
+    if (existingRows.isEmpty) {
+      return;
+    }
+    final int keepId = existingRows.first[colId] as int;
+    await db.update(
+      doctable,
+      docDetails.toJson(),
+      where: '$colId = ?',
+      whereArgs: [keepId],
+    );
+  }
+
+  Future<DocDetails> getDocDetails({int? repCode}) async {
+    final db = await database;
+    final List<Map<String, dynamic>> maps = await db.query(
+      doctable,
+      orderBy: '$colId ASC',
+      limit: 1,
+    );
+
     if (maps.isNotEmpty) {
-      return DocDetails.fromJson(maps.last);
+      return DocDetails.fromJson(maps.first);
     }
     return DocDetails.empty();
   }
@@ -1232,4 +1337,61 @@ class DatabaseHelper {
     Database db = await database;
     await db.close();
   }
+
+
+Future<void> clearTourCloseData(String userId) async {
+  final db = await database;
+
+  await db.transaction((txn) async {
+    // Delete invoice line items first
+    final invoiceRows = await txn.query(
+      invoiceTable,
+      columns: [colInvoiceId],
+      where: '$colUserId = ?',
+      whereArgs: [userId],
+    );
+
+    final invoiceIds = invoiceRows
+        .map((row) => row[colInvoiceId]?.toString())
+        .whereType<String>()
+        .toList();
+
+    for (final invoiceId in invoiceIds) {
+      await txn.delete(
+        invoicedItemTable,
+        where: '$colInvoiceId = ?',
+        whereArgs: [invoiceId],
+      );
+    }
+
+    // Delete invoices
+    await txn.delete(
+      invoiceTable,
+      where: '$colUserId = ?',
+      whereArgs: [userId],
+    );
+
+    // Delete receipts
+    await txn.delete(
+      recieptTable,
+      where: '$colUserId = ?',
+      whereArgs: [userId],
+    );
+
+    // Delete GIN
+    await txn.delete(
+      ginTable,
+      where: '$colUserId = ?',
+      whereArgs: [userId],
+    );
+
+    // Delete GIN line items
+    await txn.delete(
+      lineItemsTable,
+      where: '$colUserId = ?',
+      whereArgs: [userId],
+    );
+  });
+}
+
 }

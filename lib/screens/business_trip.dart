@@ -10,6 +10,7 @@ import 'package:m_sales/screens/dashboard/landing_page.dart';
 import 'package:m_sales/screens/login.dart';
 import 'package:m_sales/services/auth_service.dart';
 import 'package:m_sales/services/customer_service.dart';
+import 'package:m_sales/services/data_save_service.dart';
 import 'package:provider/provider.dart';
 
 class SecondPage extends StatefulWidget {
@@ -33,50 +34,135 @@ class _SecondPageState extends State<SecondPage> {
     getData();
   }
 
-  getData() async {
-    userId = await Settings.getUserID() ?? '';
-    String? inprogressGin = await Settings.getGinStuHdrFgnRefCode();
+  Future<void> getData() async {
+  userId = await Settings.getUserID() ?? '';
+  String? inprogressGin = await Settings.getGinStuHdrFgnRefCode();
 
-    List<ClosedTrip> closedTripList =
-        await DatabaseHelper.instance.getclosedTrips();
+  List<ClosedTrip> closedTripList =
+      await DatabaseHelper.instance.getclosedTrips();
 
-    List<GinResponse> _ginResponses =
-        await DatabaseHelper.instance.getAllGinResponsesByUserId(userId!);
+  List<GinResponse> fetchedGinResponses =
+      await DatabaseHelper.instance.getAllGinResponsesByUserId(userId!);
 
-    if (inprogressGin == null || inprogressGin == '') {
-      if (closedTripList.isNotEmpty) {
-        for (var ginRes in _ginResponses) {
-          bool isClosedGin = false;
-          for (var trip in closedTripList) {
-            if (ginRes.ginStuHdrFgnRefCode == trip.ginStuHdrFgnRefCode) {
-              isClosedGin = true;
-            }
-          }
-          if (!isClosedGin) {
-            ginResponses.add(ginRes);
+  // Always rebuild the list from fresh DB data.
+  ginResponses.clear();
+
+  if (inprogressGin == null || inprogressGin.isEmpty) {
+    if (closedTripList.isNotEmpty) {
+      for (var ginRes in fetchedGinResponses) {
+        bool isClosedGin = false;
+
+        for (var trip in closedTripList) {
+          if (ginRes.ginStuHdrFgnRefCode ==
+              trip.ginStuHdrFgnRefCode) {
+            isClosedGin = true;
+            break;
           }
         }
-      } else {
-        ginResponses = _ginResponses;
+
+        if (!isClosedGin) {
+          ginResponses.add(ginRes);
+        }
       }
     } else {
-      ginResponses.add(_ginResponses.firstWhere((element) {
-        return element.ginStuHdrFgnRefCode == inprogressGin;
-      }));
+      ginResponses.addAll(fetchedGinResponses);
     }
+  } else {
+    // Only add the in-progress GIN if it exists in the refreshed data.
+    final matchingGin = fetchedGinResponses.where(
+      (element) =>
+          element.ginStuHdrFgnRefCode == inprogressGin,
+    );
 
-    if (ginResponses.isEmpty) {
-      buttonText = 'Log out';
-      Get.snackbar(
-        'Error',
-        'No trips available',
-        backgroundColor: Colors.red,
-        colorText: Colors.white,
-      );
+    if (matchingGin.isNotEmpty) {
+      ginResponses.add(matchingGin.first);
     }
+  }
+
+  // Remove duplicate GINs with the same FGN reference code.
+final uniqueGinResponses = <String, GinResponse>{};
+
+for (final gin in ginResponses) {
+  final refCode = gin.ginStuHdrFgnRefCode;
+
+  if (refCode != null && refCode.isNotEmpty) {
+    uniqueGinResponses[refCode] = gin;
+  }
+}
+
+ginResponses = uniqueGinResponses.values.toList();
+
+
+  // Make sure the selected dropdown value still exists
+  // exactly once in the current list.
+  final matchingSelectedTrip = ginResponses.where(
+    (gin) => gin.ginStuHdrFgnRefCode == selectedTrip,
+  );
+
+  if (selectedTrip != null && matchingSelectedTrip.length != 1) {
+    selectedTrip = null;
+  }
+
+  // If there is an in-progress GIN, select it.
+  if (inprogressGin != null &&
+      inprogressGin.isNotEmpty &&
+      ginResponses.any(
+        (gin) => gin.ginStuHdrFgnRefCode == inprogressGin,
+      )) {
+    selectedTrip = inprogressGin;
+  }
+
+  if (ginResponses.isEmpty) {
+    buttonText = 'Log out';
+
+    Get.snackbar(
+      'Error',
+      'No trips available',
+      backgroundColor: Colors.red,
+      colorText: Colors.white,
+    );
+  }
+
+  if (mounted) {
     setState(() {
       isLoading = false;
     });
+  }
+}
+
+  /// Fresh tour only. Sub-GIN refresh must not call this.
+  Future<bool> _syncFreshTourMasters(String userId) async {
+    final CustomerProvider provider =
+        Provider.of<CustomerProvider>(context, listen: false);
+    final List<String> ginNos = provider.ginresponse
+        .map((gin) => gin.ginStuHdrFgnRefCode)
+        .whereType<String>()
+        .where((code) => code.isNotEmpty)
+        .toSet()
+        .toList();
+    if (ginNos.isEmpty) {
+      print('FRESH GIN - no GIN returned');
+      return false;
+    }
+
+    try {
+      print('FRESH GIN - syncing master data');
+      await provider.fetchCustomers(userId);
+      await provider.fetchItems(userId);
+      await provider.fetchBankList(userId);
+      final bool docsSynced = await SaveDataService().getDocAttribute();
+      if (!docsSynced) {
+        print('FRESH GIN - document attributes failed');
+        return false;
+      }
+      await provider.syncPriceTable(userId, ginNos);
+      print('FRESH GIN - master data completed');
+      return true;
+    } catch (error, stackTrace) {
+      print('FRESH GIN MASTER SYNC ERROR: $error');
+      print('FRESH GIN MASTER SYNC STACK: $stackTrace');
+      return false;
+    }
   }
 
   @override
@@ -98,12 +184,58 @@ class _SecondPageState extends State<SecondPage> {
                     children: [
                       IconButton(
                           onPressed: () async {
-                            Loading().startLoading(context);
-                            await Provider.of<CustomerProvider>(context,
-                                    listen: false)
-                                .syncGinStuff(userId!);
-                            await getData();
-                            Loading().stopLoading(context);
+                            print('REFRESH 1 - button pressed');
+                            try {
+                              Loading().startLoading(context);
+                              final hasValidToken =
+                                  await Provider.of<AuthService>(
+                                context,
+                                listen: false,
+                              ).ensureValidAccessToken();
+                              if (!hasValidToken) {
+                                Get.snackbar(
+                                  'Connection Required',
+                                  'Refresh requires an internet connection. Please connect and try again.',
+                                  backgroundColor: Colors.red,
+                                  colorText: Colors.white,
+                                );
+                                return;
+                              }
+                              final String? activeFgn =
+                                  await Settings.getGinStuHdrFgnRefCode();
+                              final bool isFreshGin =
+                                  activeFgn == null || activeFgn.isEmpty;
+                              print('REFRESH 2 - before syncGinStuff');
+                              print('REFRESH - isFreshGin: $isFreshGin');
+                              await Provider.of<CustomerProvider>(context,
+                                      listen: false)
+                                  .syncGinStuff(userId!);
+                              print('REFRESH 3 - syncGinStuff completed');
+                              if (isFreshGin) {
+                                final bool mastersSynced =
+                                    await _syncFreshTourMasters(userId!);
+                                if (!mastersSynced) {
+                                  Get.snackbar(
+                                    'Sync Failed',
+                                    'New tour data was not fully refreshed. Please try again.',
+                                    backgroundColor: Colors.red,
+                                    colorText: Colors.white,
+                                  );
+                                  // GIN may exist locally, but masters are incomplete —
+                                  // do not present the tour as fully ready.
+                                  return;
+                                }
+                              }
+                              print('REFRESH 4 - before getData');
+                              await getData();
+                              print('REFRESH 5 - getData completed');
+                              print('REFRESH 6 - stopping loading');
+                            } catch (error, stackTrace) {
+                              print('REFRESH ERROR: $error');
+                              print('REFRESH STACK TRACE: $stackTrace');
+                            } finally {
+                              Loading().stopLoading(context);
+                            }
                           },
                           icon: const Icon(Icons.sync)),
                     ],
@@ -216,7 +348,7 @@ class _SecondPageState extends State<SecondPage> {
                     buttonText,
                     style: const TextStyle(fontSize: 15.0, color: Colors.white),
                   ),
-                  onPressed: () {
+                  onPressed: () async {
                     if (ginResponses.isNotEmpty) {
                       if (selectedBusiness == null) {
                         Get.snackbar(
@@ -237,17 +369,27 @@ class _SecondPageState extends State<SecondPage> {
                         print(selectedTrip);
                         print("---====-=++_");
 
-                        for (var ginRes in ginResponses) {
-                          if (ginRes.ginStuHdrFgnRefCode == selectedTrip) {
-                            updtGin(ginRes.ginStuHdrGinNo);
+                        final selectedGin = ginResponses.where(
+                          (ginRes) =>
+                              ginRes.ginStuHdrFgnRefCode == selectedTrip,
+                        );
 
-                            Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (context) => const Home(),
-                              ),
-                            );
-                          }
+                        if (selectedGin.isEmpty) {
+                          Get.snackbar(
+                            'Warning',
+                            'Please Select Trip',
+                            backgroundColor: Colors.orange,
+                            colorText: Colors.white,
+                          );
+                          return;
                         }
+
+                        await Settings.setGinStuHdrFgnRefCode(selectedTrip);
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (context) => const Home(),
+                          ),
+                        );
                       }
                     } else {
                       Navigator.of(context).pushAndRemoveUntil(
@@ -264,10 +406,5 @@ class _SecondPageState extends State<SecondPage> {
         ),
       ),
     );
-  }
-
-  Future<void> updtGin(String? ginNo) async {
-    print(ginNo);
-    await Provider.of<AuthService>(context, listen: false).updateGin(ginNo!);
   }
 }

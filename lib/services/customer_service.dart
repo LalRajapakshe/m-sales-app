@@ -133,8 +133,10 @@ class CustomerProvider with ChangeNotifier {
           "Authorization": "Bearer $accessToken"
         },
       );
-      print(url);
-      print(response.body);
+//print("PRICE TABLE URL: $url");
+//print("PRICE TABLE STATUS: ${response.statusCode}");
+//print("PRICE TABLE REASON: ${response.reasonPhrase}");
+//print("PRICE TABLE BODY: ${response.body}");
       if (response.statusCode == 200) {
         List<dynamic> data = json.decode(response.body);
         _prices = data.map((json) {
@@ -208,12 +210,19 @@ class CustomerProvider with ChangeNotifier {
     }
   }
 
-  Future<void> syncGinStuff(String userId) async {
-    String formattedDate = formatter.format(now);
-    String accessToken = await Settings.getAccessToken();
-    final url = Uri.parse(
-        '$BASER_URL/tapi/$TENENT/mobile/mobileSales/syncGinStuffHeader?GinNo=NULL&UserId=$userId&RequestDateTime=$formattedDate');
-    try {
+  /// Downloads the server price table into the local `price` table.
+  /// Does not update GIN line-item prices.
+  Future<void> syncPriceTable(String userId, List<String> ginNos) async {
+    if (ginNos.isEmpty) {
+      throw Exception('Failed to load price table');
+    }
+    final String formattedDate = formatter.format(DateTime.now());
+    final String accessToken = await Settings.getAccessToken();
+    final List<Price> allPrices = [];
+
+    for (final String ginNo in ginNos) {
+      final url = Uri.parse(
+          '$BASER_URL/tapi/$TENENT/mobile/mobileSales/syncPriceTableMaster?UserId=${Uri.encodeQueryComponent(userId)}&RequestDateTime=${Uri.encodeQueryComponent(formattedDate)}&GinNo=${Uri.encodeQueryComponent(ginNo)}');
       final response = await http.get(
         url,
         headers: {
@@ -221,10 +230,60 @@ class CustomerProvider with ChangeNotifier {
           "Authorization": "Bearer $accessToken"
         },
       );
-      print(url);
-      print(response.body);
+      if (response.statusCode != 200) {
+        throw Exception('Failed to load price table');
+      }
+      final decoded = json.decode(response.body);
+      if (decoded is! List) {
+        throw Exception('Failed to load price table');
+      }
+      allPrices.addAll(decoded.map((jsonRow) {
+        final Price price = Price.fromJson(jsonRow);
+        price.userId = userId;
+        return price;
+      }));
+    }
+
+    await DatabaseHelper.instance.insertPrices(allPrices);
+    _prices = allPrices;
+    notifyListeners();
+  }
+
+  Future<void> syncGinStuff(String userId) async {
+    String formattedDate = formatter.format(now);
+    String accessToken = await Settings.getAccessToken();
+    final String? activeFgn = await Settings.getGinStuHdrFgnRefCode();
+    final bool hasActiveGin =
+        activeFgn != null && activeFgn.isNotEmpty;
+    final String ginNoQuery = hasActiveGin ? activeFgn : 'NULL';
+    final url = Uri.parse(
+        '$BASER_URL/tapi/$TENENT/mobile/mobileSales/syncGinStuffHeader?GinNo=${Uri.encodeQueryComponent(ginNoQuery)}&UserId=${Uri.encodeQueryComponent(userId)}&RequestDateTime=${Uri.encodeQueryComponent(formattedDate)}');
+    try {
+      print('GIN SYNC - BEFORE HTTP');
+      print('GIN SYNC - activeFgn: $activeFgn');
+      print('GIN SYNC - hasActiveGin: $hasActiveGin');
+      print('GIN SYNC - URL: $url');
+      final response = await http.get(
+        url,
+        headers: {
+          'Content-Type': 'application/json',
+          "Authorization": "Bearer $accessToken"
+        },
+      ).timeout(const Duration(seconds: 15));
+      print('GIN SYNC - AFTER HTTP');
+      print('GIN SYNC - status: ${response.statusCode}');
+      print('GIN SYNC - body: ${response.body}');
       if (response.statusCode == 200) {
-        List<dynamic> data = json.decode(response.body);
+        List<dynamic> data = [];
+        if (response.body.isNotEmpty) {
+          final decoded = json.decode(response.body);
+          if (decoded is List) {
+            data = decoded;
+          } else if (!hasActiveGin) {
+            throw Exception('Failed to load');
+          }
+        }
+
         _ginResponse = data.map((json) {
           GinResponse _gin = GinResponse.fromJson(json);
           _gin.userId = userId;
@@ -232,22 +291,49 @@ class CustomerProvider with ChangeNotifier {
         }).toList();
 
         for (var ginItem in _ginResponse) {
-          String ginStuHdrFgnRefCode = ginItem.ginStuHdrFgnRefCode!;
+          String ginStuHdrFgnRefCode = ginItem.ginStuHdrFgnRefCode ?? '';
 
-          for (var lineItm in ginItem.lineItems!) {
+          for (var lineItm in ginItem.lineItems ?? []) {
             lineItm.ginStuHdrFgnRefCode = ginStuHdrFgnRefCode;
             lineItm.userId = userId;
           }
         }
 
+        print('GIN SYNC - before insertGinResponse');
         if (_ginResponse.isNotEmpty) {
-          await DatabaseHelper.instance.insertGinResponse(_ginResponse);
+          await DatabaseHelper.instance.insertGinResponse(
+            _ginResponse,
+            replaceExisting: !hasActiveGin,
+          );
         }
+        print('GIN SYNC - after insertGinResponse');
+
+        if (hasActiveGin && _ginResponse.isNotEmpty) {
+          final bool hasMatchingActiveFgn = _ginResponse.any(
+            (ginItem) => ginItem.ginStuHdrFgnRefCode == activeFgn,
+          );
+          if (hasMatchingActiveFgn) {
+            final BuildContext? authContext =
+                navigatorKey.currentState?.context;
+            if (authContext != null) {
+              print('GIN SYNC - UpdateGINStatus for FGN: $activeFgn');
+              final bool updated = await Provider.of<AuthService>(
+                authContext,
+                listen: false,
+              ).updateGin(activeFgn);
+              print('GIN SYNC - UpdateGINStatus result: $updated');
+            }
+          }
+        }
+
+        print('GIN SYNC - before notifyListeners');
         notifyListeners();
       } else {
         throw Exception('Failed to load');
       }
-    } catch (error) {
+    } catch (error, stackTrace) {
+      print('GIN SYNC - ERROR: $error');
+      print('GIN SYNC - STACK TRACE: $stackTrace');
       throw error;
     }
   }

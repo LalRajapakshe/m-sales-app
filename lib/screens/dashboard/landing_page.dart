@@ -17,6 +17,9 @@ import 'package:m_sales/screens/login.dart';
 import 'package:m_sales/screens/receipt/all_reciept_histort.dart';
 import 'package:m_sales/services/data_save_service.dart';
 
+import 'package:provider/provider.dart';
+import 'package:m_sales/services/auth_service.dart';
+
 class Home extends StatefulWidget {
   const Home({super.key});
 
@@ -144,7 +147,7 @@ class _HomeState extends State<Home> {
     }
   }
 
-  onTapTourClose() async {
+/*   onTapTourClose() async {
     if (inProgressTrip != null || inProgressTrip != '') {
       await postMethod();
       await DatabaseHelper.instance.insertClosedTrip(
@@ -157,7 +160,63 @@ class _HomeState extends State<Home> {
         (route) => false,
       );
     }
+  } */
+ onTapTourClose() async {
+  if (inProgressTrip == null || inProgressTrip!.isEmpty) {
+    Get.snackbar(
+      'Warning',
+      'No active tour found',
+      backgroundColor: Colors.orange,
+      colorText: Colors.white,
+    );
+    return;
   }
+
+  Loading().startLoading(context);
+
+  final hasValidToken = await Provider.of<AuthService>(
+    context,
+    listen: false,
+  ).ensureValidAccessToken();
+
+  if (!hasValidToken) {
+    Loading().stopLoading(context);
+    Get.snackbar(
+      'Connection Required',
+      'Tour Close requires an internet connection. Please connect and try again.',
+      backgroundColor: Colors.red,
+      colorText: Colors.white,
+    );
+    return;
+  }
+
+  final success = await tourClose();
+
+  Loading().stopLoading(context);
+
+  if (success) {
+    Get.snackbar(
+      'Success',
+      'Tour closed successfully',
+      backgroundColor: const Color.fromARGB(255, 50, 118, 52),
+      colorText: Colors.white,
+    );
+
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(
+        builder: (context) => const SecondPage(),
+      ),
+      (route) => false,
+    );
+  } else {
+    Get.snackbar(
+      'Tour Close Failed',
+      'Tour was not closed. Please try again.',
+      backgroundColor: Colors.red,
+      colorText: Colors.white,
+    );
+  }
+}
 
   onTapSyncData() {
     syncData(context, null);
@@ -258,6 +317,175 @@ class _HomeState extends State<Home> {
       ),
     );
   }
+
+ Future<bool> tourClose() async {
+  final saveDataService = SaveDataService();
+
+  try {
+    final userId = await Settings.getUserID();
+
+    if (userId == null || userId.isEmpty) {
+      throw Exception('User ID not found');
+    }
+
+    final ginNo = await Settings.getGinStuHdrFgnRefCode();
+
+    if (ginNo == null || ginNo.isEmpty) {
+      throw Exception('No active tour found');
+    }
+
+    // --------------------------------------------------
+    // 1. GET CURRENT DOCS
+    // --------------------------------------------------
+
+    final docs = await DatabaseHelper.instance.getDocDetails();
+
+    if (docs.repCode == null) {
+      throw Exception('Representative code not found');
+    }
+
+    print('Tour Close Docs');
+    print('RepCode: ${docs.repCode}');
+    print('InvLastNo: ${docs.invLastNo}');
+    print('CashReceLastNo: ${docs.cashReceLastNo}');
+    print('BankReceLastNo: ${docs.bankReceLastNo}');
+    print('ReturnLastNo: ${docs.returnLastNo}');
+
+    // --------------------------------------------------
+    // 2. BUILD LOCAL TRANSACTION LISTS
+    // --------------------------------------------------
+
+    final invoiceList =
+        await saveDataService.getInvoiceList(null);
+
+    final receiptList =
+        await saveDataService.getAllReceipts();
+
+    final settlementList =
+        await saveDataService.getSettlementList();
+
+    print('Invoices: ${invoiceList.length}');
+    print('Receipts: ${receiptList.length}');
+    print('Settlements: ${settlementList.length}');
+
+    // --------------------------------------------------
+    // 3. SAVE INVOICES
+    // --------------------------------------------------
+
+    final invRes =
+        await saveDataService.saveInvoices(invoiceList);
+
+    if (!invRes) {
+      print('Tour Close stopped: invoice upload failed');
+      return false;
+    }
+
+    // --------------------------------------------------
+    // 4. SAVE RECEIPTS
+    // --------------------------------------------------
+
+    final recRes =
+        await saveDataService.saveReciepts(receiptList);
+
+    if (!recRes) {
+      print('Tour Close stopped: receipt upload failed');
+      return false;
+    }
+
+    // --------------------------------------------------
+    // 5. SAVE SETTLEMENTS
+    // --------------------------------------------------
+
+    final setRes =
+        await saveDataService.saveSettlements(settlementList);
+
+    if (!setRes) {
+      print('Tour Close stopped: settlement upload failed');
+      return false;
+    }
+
+    // --------------------------------------------------
+    // 4. UPDATE LAST NUMBERS ON SERVER
+    // --------------------------------------------------
+
+    final docUpdateResult =
+        await saveDataService.updateDocAttributeMaster(
+      repCode: docs.repCode!,
+      invLastNo: docs.invLastNo ?? 0,
+      cashReceLastNo: docs.cashReceLastNo ?? 0,
+      bankReceLastNo: docs.bankReceLastNo ?? 0,
+      returnLastNo: docs.returnLastNo ?? 0,
+    );
+
+    if (!docUpdateResult) {
+      print('Tour Close stopped: document number update failed');
+      return false;
+    }
+
+    // --------------------------------------------------
+    // 5. VERIFY SERVER DOCUMENTS
+    // --------------------------------------------------
+
+    final verificationResult =
+        await saveDataService.verifyTourClose(
+      ginNo: ginNo,
+      dateTime: DateTime.now()
+          .toString()
+          .substring(0, 19),
+      invoiceList: invoiceList,
+      receiptList: receiptList,
+      settlementList: settlementList,
+    );
+
+    if (!verificationResult) {
+      print('Tour Close stopped: verification failed');
+      return false;
+    }
+
+    // --------------------------------------------------
+    // 6. UPDATE GIN STATUS ON SERVER (FGN reference)
+    // --------------------------------------------------
+
+    final ginResult = await Provider.of<AuthService>(
+      context,
+      listen: false,
+    ).updateGin(ginNo);
+
+    if (!ginResult) {
+      print('Tour Close stopped: GIN update failed');
+      return false;
+    }
+
+    // --------------------------------------------------
+    // 7. CLEAR LOCAL TOUR DATA
+    // --------------------------------------------------
+
+    await DatabaseHelper.instance
+        .clearTourCloseData(userId);
+
+    // --------------------------------------------------
+    // 10. MARK TOUR CLOSED
+    // --------------------------------------------------
+
+    await DatabaseHelper.instance.insertClosedTrip(
+      ClosedTrip(
+        ginStuHdrFgnRefCode: ginNo,
+        userId: userId,
+      ),
+    );
+
+    // --------------------------------------------------
+    // 11. CLEAR ACTIVE GIN
+    // --------------------------------------------------
+
+    await Settings.setGinStuHdrFgnRefCode('');
+
+    return true;
+  } catch (error) {
+    print('Tour Close Error: $error');
+    return false;
+  }
+} 
 }
 
 enum DrawerSections {

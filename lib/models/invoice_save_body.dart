@@ -69,6 +69,8 @@ class InvoiceSaveBody {
     data['customerName'] = customerName;
     data['status'] = status;
     data['tripCode'] = tripCode;
+    data['docTime'] = docTime;
+    data['locationId'] = locationId;
     if (lineItems != null) {
       data['lineItems'] = lineItems;
     }
