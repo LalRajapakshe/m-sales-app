@@ -297,13 +297,9 @@ Future<bool> updateGin(String ginNo) async {
   String accessToken = await Settings.getAccessToken();
 
   try {
-    final body = jsonEncode({
-      'GinNos': [
-        {
-          'ginNo': ginNo,
-        }
-      ]
-    });
+    final body = jsonEncode([
+      {'ginNo': ginNo}
+    ]);
 
     final response = await http.post(
       url,

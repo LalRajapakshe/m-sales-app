@@ -27,18 +27,18 @@ class DocDetails {
       this.docNoLength});
 
   DocDetails.fromJson(Map<String, dynamic> json) {
-    repCode = json['repCode'];
-    repShortCode = json['repShortCode'];
-    repName = json['repName'];
-    invCode = json['invCode'];
-    cashReceCode = json['cashReceCode'];
-    bankReceCode = json['bankReceCode'];
-    returnCode = json['returnCode'];
-    invLastNo = json['invLastNo'];
-    cashReceLastNo = json['cashReceLastNo'];
-    bankReceLastNo = json['bankReceLastNo'];
-    returnLastNo = json['returnLastNo'];
-    docNoLength = json['docNoLength'];
+    repCode = _jsonInt(json['repCode']);
+    repShortCode = _jsonString(json['repShortCode']);
+    repName = _jsonString(json['repName']);
+    invCode = _jsonString(json['invCode']);
+    cashReceCode = _jsonString(json['cashReceCode']);
+    bankReceCode = _jsonString(json['bankReceCode']);
+    returnCode = _jsonString(json['returnCode']);
+    invLastNo = _jsonInt(json['invLastNo']);
+    cashReceLastNo = _jsonInt(json['cashReceLastNo']);
+    bankReceLastNo = _jsonInt(json['bankReceLastNo']);
+    returnLastNo = _jsonInt(json['returnLastNo']);
+    docNoLength = _jsonInt(json['docNoLength']);
   }
 
   Map<String, dynamic> toJson() {
@@ -71,4 +71,24 @@ class DocDetails {
       bankReceLastNo: 0,
       returnLastNo: 0,
       docNoLength: 0);
+}
+
+int? _jsonInt(dynamic value) {
+  if (value == null) {
+    return null;
+  }
+  if (value is int) {
+    return value;
+  }
+  if (value is num) {
+    return value.toInt();
+  }
+  return int.tryParse(value.toString().trim());
+}
+
+String? _jsonString(dynamic value) {
+  if (value == null) {
+    return null;
+  }
+  return value.toString();
 }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:m_sales/Widgets/full_screen_loading.dart';
 import 'package:m_sales/Widgets/loading.dart';
+import 'package:m_sales/helper/app_helper.dart';
 import 'package:m_sales/helper/db_helper.dart';
 import 'package:m_sales/helper/local_db.dart';
 import 'package:m_sales/models/closedTrip.dart';
@@ -10,7 +11,6 @@ import 'package:m_sales/screens/dashboard/landing_page.dart';
 import 'package:m_sales/screens/login.dart';
 import 'package:m_sales/services/auth_service.dart';
 import 'package:m_sales/services/customer_service.dart';
-import 'package:m_sales/services/data_save_service.dart';
 import 'package:provider/provider.dart';
 
 class SecondPage extends StatefulWidget {
@@ -130,41 +130,6 @@ ginResponses = uniqueGinResponses.values.toList();
   }
 }
 
-  /// Fresh tour only. Sub-GIN refresh must not call this.
-  Future<bool> _syncFreshTourMasters(String userId) async {
-    final CustomerProvider provider =
-        Provider.of<CustomerProvider>(context, listen: false);
-    final List<String> ginNos = provider.ginresponse
-        .map((gin) => gin.ginStuHdrFgnRefCode)
-        .whereType<String>()
-        .where((code) => code.isNotEmpty)
-        .toSet()
-        .toList();
-    if (ginNos.isEmpty) {
-      print('FRESH GIN - no GIN returned');
-      return false;
-    }
-
-    try {
-      print('FRESH GIN - syncing master data');
-      await provider.fetchCustomers(userId);
-      await provider.fetchItems(userId);
-      await provider.fetchBankList(userId);
-      final bool docsSynced = await SaveDataService().getDocAttribute();
-      if (!docsSynced) {
-        print('FRESH GIN - document attributes failed');
-        return false;
-      }
-      await provider.syncPriceTable(userId, ginNos);
-      print('FRESH GIN - master data completed');
-      return true;
-    } catch (error, stackTrace) {
-      print('FRESH GIN MASTER SYNC ERROR: $error');
-      print('FRESH GIN MASTER SYNC STACK: $stackTrace');
-      return false;
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -207,13 +172,35 @@ ginResponses = uniqueGinResponses.values.toList();
                                   activeFgn == null || activeFgn.isEmpty;
                               print('REFRESH 2 - before syncGinStuff');
                               print('REFRESH - isFreshGin: $isFreshGin');
-                              await Provider.of<CustomerProvider>(context,
-                                      listen: false)
-                                  .syncGinStuff(userId!);
+                              final List<GinResponse> syncedGins =
+                                  await Provider.of<CustomerProvider>(context,
+                                          listen: false)
+                                      .syncGinStuff(userId!);
                               print('REFRESH 3 - syncGinStuff completed');
                               if (isFreshGin) {
+                                final List<String> newFgns = syncedGins
+                                    .map((gin) => gin.ginStuHdrFgnRefCode)
+                                    .whereType<String>()
+                                    .where((code) => code.isNotEmpty)
+                                    .toSet()
+                                    .toList();
+                                print('FRESH GIN - FGN from this response: $newFgns');
+                                if (newFgns.isEmpty) {
+                                  Get.snackbar(
+                                    'Sync Failed',
+                                    'New tour data was not fully refreshed. Please try again.',
+                                    backgroundColor: Colors.red,
+                                    colorText: Colors.white,
+                                  );
+                                  return;
+                                }
+                                print(
+                                    'FRESH SYNC -> syncFreshTourMasters START, userId=$userId, FGN=$newFgns');
                                 final bool mastersSynced =
-                                    await _syncFreshTourMasters(userId!);
+                                    await syncFreshTourMasters(
+                                        context, userId!, newFgns);
+                                print(
+                                    'FRESH SYNC -> syncFreshTourMasters END, result=$mastersSynced');
                                 if (!mastersSynced) {
                                   Get.snackbar(
                                     'Sync Failed',

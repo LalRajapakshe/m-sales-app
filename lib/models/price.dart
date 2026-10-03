@@ -14,12 +14,12 @@ class Price {
       this.userId});
 
   Price.fromJson(Map<String, dynamic> json) {
-    prTbPriceTableCode = json['prTbPriceTableCode'];
-    prTbItemCode = json['prTbItemCode'];
-    price = double.tryParse(json['price'].toString());
-    priceType = json['priceType'];
-    prTbBatchCOde = json['prTbBatchCOde'];
-    userId = json['userId'];
+    prTbPriceTableCode = _jsonInt(json['prTbPriceTableCode']);
+    prTbItemCode = _jsonInt(json['prTbItemCode']);
+    price = _jsonDouble(json['price']);
+    priceType = _jsonString(json['priceType']);
+    prTbBatchCOde = _jsonString(json['prTbBatchCOde']);
+    userId = _jsonString(json['userId']);
   }
 
   Map<String, dynamic> toJson() {
@@ -32,4 +32,37 @@ class Price {
     data['userId'] = userId;
     return data;
   }
+}
+
+int? _jsonInt(dynamic value) {
+  if (value == null) {
+    return null;
+  }
+  if (value is int) {
+    return value;
+  }
+  if (value is num) {
+    return value.toInt();
+  }
+  return int.tryParse(value.toString().trim());
+}
+
+double? _jsonDouble(dynamic value) {
+  if (value == null) {
+    return null;
+  }
+  if (value is double) {
+    return value;
+  }
+  if (value is num) {
+    return value.toDouble();
+  }
+  return double.tryParse(value.toString().trim());
+}
+
+String? _jsonString(dynamic value) {
+  if (value == null) {
+    return null;
+  }
+  return value.toString();
 }

@@ -543,6 +543,9 @@ class DatabaseHelper {
   }
 
   Future<void> insertPrices(List<Price> prices) async {
+    if (prices.isEmpty) {
+      return;
+    }
     final db = await database;
     final batch = db.batch();
     String userId = await Settings.getUserID() ?? '';

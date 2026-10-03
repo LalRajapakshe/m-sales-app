@@ -212,6 +212,7 @@ class CustomerProvider with ChangeNotifier {
 
   /// Downloads the server price table into the local `price` table.
   /// Does not update GIN line-item prices.
+  /// [ginNos] must be the FGN reference codes from the GIN response just taken.
   Future<void> syncPriceTable(String userId, List<String> ginNos) async {
     if (ginNos.isEmpty) {
       throw Exception('Failed to load price table');
@@ -230,6 +231,10 @@ class CustomerProvider with ChangeNotifier {
           "Authorization": "Bearer $accessToken"
         },
       );
+      print('PRICE SYNC - FGN: $ginNo');
+      print('PRICE SYNC - URL: $url');
+      print('PRICE SYNC - status: ${response.statusCode}');
+      print('PRICE SYNC - body: ${response.body}');
       if (response.statusCode != 200) {
         throw Exception('Failed to load price table');
       }
@@ -237,11 +242,19 @@ class CustomerProvider with ChangeNotifier {
       if (decoded is! List) {
         throw Exception('Failed to load price table');
       }
-      allPrices.addAll(decoded.map((jsonRow) {
-        final Price price = Price.fromJson(jsonRow);
+      final List<Price> pricesForGin = [];
+      for (final jsonRow in decoded) {
+        if (jsonRow is! Map) {
+          throw Exception('Failed to load price table');
+        }
+        final Price price = Price.fromJson(Map<String, dynamic>.from(jsonRow));
         price.userId = userId;
-        return price;
-      }));
+        pricesForGin.add(price);
+      }
+      if (pricesForGin.isEmpty) {
+        throw Exception('Failed to load price table');
+      }
+      allPrices.addAll(pricesForGin);
     }
 
     await DatabaseHelper.instance.insertPrices(allPrices);
@@ -249,7 +262,7 @@ class CustomerProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> syncGinStuff(String userId) async {
+  Future<List<GinResponse>> syncGinStuff(String userId) async {
     String formattedDate = formatter.format(now);
     String accessToken = await Settings.getAccessToken();
     final String? activeFgn = await Settings.getGinStuHdrFgnRefCode();
@@ -328,6 +341,7 @@ class CustomerProvider with ChangeNotifier {
 
         print('GIN SYNC - before notifyListeners');
         notifyListeners();
+        return _ginResponse;
       } else {
         throw Exception('Failed to load');
       }

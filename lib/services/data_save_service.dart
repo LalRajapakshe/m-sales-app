@@ -146,49 +146,67 @@ class SaveDataService {
       //   print(element.toJson());
       // }
       print(response.body);
-      if (response.statusCode == 200) {
-        var data = jsonDecode(response.body);
-        DocDetails _docDetailsResponse = DocDetails.fromJson(data);
-        DocDetails localDocDetails =
-            await DatabaseHelper.instance.getDocDetails();
-        final bool hasLocalRow =
-            localDocDetails.repCode != null && localDocDetails.repCode != 0;
-        final bool sameRep = hasLocalRow &&
-            _docDetailsResponse.repCode != null &&
-            localDocDetails.repCode == _docDetailsResponse.repCode;
-
-        if (!hasLocalRow || !sameRep) {
-          await DatabaseHelper.instance.insertDoc(_docDetailsResponse);
-        } else {
-          await DatabaseHelper.instance.insertDoc(DocDetails(
-            repCode: _docDetailsResponse.repCode ?? localDocDetails.repCode,
-            invCode: _docDetailsResponse.invCode ?? localDocDetails.invCode,
-            repName: _docDetailsResponse.repName ?? localDocDetails.repName,
-            cashReceCode: _docDetailsResponse.cashReceCode ??
-                localDocDetails.cashReceCode,
-            bankReceCode: _docDetailsResponse.bankReceCode ??
-                localDocDetails.bankReceCode,
-            returnCode:
-                _docDetailsResponse.returnCode ?? localDocDetails.returnCode,
-            repShortCode: _docDetailsResponse.repShortCode ??
-                localDocDetails.repShortCode,
-            docNoLength: _docDetailsResponse.docNoLength ??
-                localDocDetails.docNoLength,
-            invLastNo: _maxLastNo(
-                localDocDetails.invLastNo, _docDetailsResponse.invLastNo),
-            cashReceLastNo: _maxLastNo(localDocDetails.cashReceLastNo,
-                _docDetailsResponse.cashReceLastNo),
-            bankReceLastNo: _maxLastNo(localDocDetails.bankReceLastNo,
-                _docDetailsResponse.bankReceLastNo),
-            returnLastNo: _maxLastNo(localDocDetails.returnLastNo,
-                _docDetailsResponse.returnLastNo),
-          ));
-        }
-        return true;
-      } else {
+      if (response.statusCode != 200) {
+        print('DOC SYNC - failed');
+        print('DOC SYNC - URL: $url');
+        print('DOC SYNC - status: ${response.statusCode}');
+        print('DOC SYNC - body: ${response.body}');
         return false;
       }
+      final decoded = jsonDecode(response.body);
+      if (decoded is! Map) {
+        print('DOC SYNC - invalid response shape');
+        print('DOC SYNC - URL: $url');
+        print('DOC SYNC - status: ${response.statusCode}');
+        print('DOC SYNC - body: ${response.body}');
+        return false;
+      }
+      final DocDetails serverDoc =
+          DocDetails.fromJson(Map<String, dynamic>.from(decoded));
+      if (serverDoc.repCode == null || serverDoc.repCode == 0) {
+        print('DOC SYNC - response has no rep code');
+        print('DOC SYNC - URL: $url');
+        print('DOC SYNC - status: ${response.statusCode}');
+        print('DOC SYNC - body: ${response.body}');
+        return false;
+      }
+      DocDetails localDocDetails =
+          await DatabaseHelper.instance.getDocDetails();
+      final bool hasLocalRow =
+          localDocDetails.repCode != null && localDocDetails.repCode != 0;
+      final bool sameRep = hasLocalRow &&
+          serverDoc.repCode != null &&
+          localDocDetails.repCode == serverDoc.repCode;
+
+      if (!hasLocalRow || !sameRep) {
+        await DatabaseHelper.instance.insertDoc(serverDoc);
+      } else {
+        await DatabaseHelper.instance.insertDoc(DocDetails(
+          repCode: serverDoc.repCode ?? localDocDetails.repCode,
+          invCode: serverDoc.invCode ?? localDocDetails.invCode,
+          repName: serverDoc.repName ?? localDocDetails.repName,
+          cashReceCode:
+              serverDoc.cashReceCode ?? localDocDetails.cashReceCode,
+          bankReceCode:
+              serverDoc.bankReceCode ?? localDocDetails.bankReceCode,
+          returnCode: serverDoc.returnCode ?? localDocDetails.returnCode,
+          repShortCode:
+              serverDoc.repShortCode ?? localDocDetails.repShortCode,
+          docNoLength: serverDoc.docNoLength ?? localDocDetails.docNoLength,
+          invLastNo:
+              _maxLastNo(localDocDetails.invLastNo, serverDoc.invLastNo),
+          cashReceLastNo: _maxLastNo(
+              localDocDetails.cashReceLastNo, serverDoc.cashReceLastNo),
+          bankReceLastNo: _maxLastNo(
+              localDocDetails.bankReceLastNo, serverDoc.bankReceLastNo),
+          returnLastNo: _maxLastNo(
+              localDocDetails.returnLastNo, serverDoc.returnLastNo),
+        ));
+      }
+      return true;
     } catch (error) {
+      print('DOC SYNC - error: $error');
+      print('DOC SYNC - URL: $url');
       return false;
     }
   }

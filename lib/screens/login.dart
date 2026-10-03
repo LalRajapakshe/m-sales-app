@@ -4,8 +4,10 @@ import 'package:get/get.dart';
 import 'package:jwt_decoder/jwt_decoder.dart';
 import 'package:m_sales/Widgets/loading.dart';
 import 'package:m_sales/api/api_consts.dart';
+import 'package:m_sales/helper/app_helper.dart';
 import 'package:m_sales/helper/db_helper.dart';
 import 'package:m_sales/helper/local_db.dart';
+import 'package:m_sales/models/gin_response.dart';
 import 'package:m_sales/models/setting_types.dart';
 import 'package:m_sales/models/user_model.dart';
 import 'package:m_sales/screens/business_trip.dart';
@@ -59,13 +61,57 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   getData(String userId) async {
-    await getCustomers(userId);
-    await getItems(userId);
-    // await getPrices(userId);
-    await fetchBanks(userId);
-    await getDocs();
+    final String? activeFgn = await Settings.getGinStuHdrFgnRefCode();
+    final bool isFreshGin = activeFgn == null || activeFgn.isEmpty;
 
-    await syncGinStuff(userId);
+    // An already-active FGN is a sub-GIN sync. Fresh acquisition must not
+    // download masters before the GIN exists; that sync runs after it is saved.
+    if (!isFreshGin) {
+      await getCustomers(userId);
+      await getItems(userId);
+      // await getPrices(userId);
+      await fetchBanks(userId);
+      await getDocs();
+    }
+
+    final List<GinResponse> syncedGins = await syncGinStuff(userId);
+
+    if (isFreshGin) {
+      final List<String> newFgns = syncedGins
+          .map((gin) => gin.ginStuHdrFgnRefCode)
+          .whereType<String>()
+          .where((code) => code.isNotEmpty)
+          .toSet()
+          .toList();
+
+      if (newFgns.length > 1) {
+        print('FRESH GIN - multiple FGNs returned; online setup stopped');
+        Loading().stopLoading(context);
+        Get.snackbar(
+          'Tour Setup Stopped',
+          'The server returned more than one active tour.',
+          backgroundColor: Colors.red,
+          colorText: Colors.white,
+        );
+        return;
+      }
+
+      if (newFgns.length == 1) {
+        final bool mastersSynced =
+            await syncFreshTourMasters(context, userId, newFgns);
+        if (!mastersSynced) {
+          Loading().stopLoading(context);
+          Get.snackbar(
+            'Sync Failed',
+            'New tour data was not fully synchronized. Please try again.',
+            backgroundColor: Colors.red,
+            colorText: Colors.white,
+          );
+          return;
+        }
+      }
+    }
+
     User user = Provider.of<AuthService>(context, listen: false).user;
     setLoginData(user);
     Loading().stopLoading(context);
@@ -93,8 +139,8 @@ class _LoginPageState extends State<LoginPage> {
         .fetchItems(userId);
   }
 
-  syncGinStuff(String userId) async {
-    await Provider.of<CustomerProvider>(context, listen: false)
+  Future<List<GinResponse>> syncGinStuff(String userId) {
+    return Provider.of<CustomerProvider>(context, listen: false)
         .syncGinStuff(userId);
     // .whenComplete(() async {
     // if (Provider.of<CustomerProvider>(context, listen: false)
